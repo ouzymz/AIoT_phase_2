@@ -30,3 +30,24 @@ float getDistance() {
     Serial.printf("[Ultrasonic] Distance: %.2f cm\n", distance);
     return distance;
 }
+
+float getFillPercentage() {
+    float distance = getDistance();
+    
+    if (distance < 0) {
+        Serial.println("[Ultrasonic] Fill level error: no reading");
+        return -1.0f;
+    }
+
+    const float EMPTY_DISTANCE = 17.5f;  // cm - kap boş
+    const float FULL_DISTANCE  = 3.5f;   // cm - kap dolu
+
+    // Sınırların dışına çıkmasını önle
+    if (distance >= EMPTY_DISTANCE) return 0.0f;
+    if (distance <= FULL_DISTANCE)  return 100.0f;
+
+    float percentage = (EMPTY_DISTANCE - distance) / (EMPTY_DISTANCE - FULL_DISTANCE) * 100.0f;
+
+    Serial.printf("[Ultrasonic] Fill level: %.1f%%\n", percentage);
+    return percentage;
+}

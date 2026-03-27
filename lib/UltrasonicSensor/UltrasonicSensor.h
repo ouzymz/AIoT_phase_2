@@ -2,3 +2,4 @@
 
 void initUltrasonic();
 float getDistance();
+float getFillPercentage();  
