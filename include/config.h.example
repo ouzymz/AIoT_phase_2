@@ -1,0 +1,15 @@
+#pragma once
+
+#define WIFI_SSID       "your_wifi_ssid"
+#define WIFI_PASSWORD   "your_wifi_password"
+#define SERVER_IP       "192.168.1.xxx"   // FastAPI server LAN IP
+#define SERVER_PORT     8000
+
+#define LED_RED_PIN     21
+#define LED_GREEN_PIN   20
+#define LED_BLUE_PIN    19
+#define LEDC_FREQ       12000
+#define LEDC_RES        8
+
+#define TRIG_PIN        3
+#define ECHO_PIN        46

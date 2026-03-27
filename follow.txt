@@ -1,0 +1,8 @@
+1. Temiz yağ        → t0_p0_c0 (20 foto) ok
+9. Boya ekle        → t1_p0_c1 (15 foto) ok
+10. Partikül ekle   → t1_p1_c1 (15 foto) ok 
+8. Su ekle          → t1_p0_c0 (20 foto) ok 
+12. Su + partikül   → t1_p1_c0 (15 foto) ok
+3. Partikül ekle    → t0_p1_c1 (15 foto) ok
+5. Partikül ekle    → t0_p1_c0 (20 foto) ok
+2. Boya ekle        → t0_p0_c1 (20 foto) ok
