@@ -7,6 +7,7 @@
 #include "CameraManager.h"
 #include "LEDController.h"
 #include "UltrasonicSensor.h"
+#include "PreprocessService.h"
 
 WebServer server(80);
 
@@ -93,6 +94,46 @@ void handleCapture() {
 }
 
 
+void handleSnapshot() {
+    Serial.println("[Server] GET /snapshot received");
+
+    // 1. Capture JPEG (800x600)
+    ledOn();
+    delay(1000);
+    camera_fb_t* fb = capturePhoto();
+    delay(1000);
+    ledOff();
+
+    if (!fb) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
+        return;
+    }
+
+    // 2. Measure fill level
+    float fillPct = getFillPercentage();
+    Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
+
+    // 3. Preprocess: crop 480x480 @ (362,284) + circle mask + bilinear resize → 192x192 JPEG
+    uint8_t* out_jpg = nullptr;
+    size_t   out_len = 0;
+    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len);
+    releasePhoto(fb);
+
+    if (!ok || !out_jpg) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"preprocess failed\"}");
+        return;
+    }
+
+    // 4. Send preprocessed 192x192 JPEG; fill percentage in custom header
+    server.sendHeader("X-Fill-Percentage", String(fillPct, 1));
+    server.send_P(200, "image/jpeg", (const char*)out_jpg, out_len);
+
+    free(out_jpg);
+}
+
+
 // ─── Setup / Loop ────────────────────────────────────────────────────────────
 
 void setup() {
@@ -125,12 +166,14 @@ void setup() {
 
     Serial.printf("[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
 
-    server.on("/capture",   HTTP_GET, handleCapture);
+    server.on("/capture",  HTTP_GET, handleCapture);
+    server.on("/snapshot", HTTP_GET, handleSnapshot);
     server.begin();
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
     Serial.println("  Capture:   GET http://" + ip + "/capture");
+    Serial.println("  Snapshot:  GET http://" + ip + "/snapshot");
 }
 
 void loop() {
