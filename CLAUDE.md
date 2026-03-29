@@ -4,69 +4,59 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**AIoT Phase 2** is an embedded vision + IoT system running on an ESP32-S3 microcontroller. It captures images of containers during industrial mixing processes using an OV2640 camera, measures fill levels with an HC-SR04 ultrasonic sensor, and uploads data to a backend server for analysis. The project also embeds a TensorFlow Lite model (`src/wco_model_data.h`) for future on-device inference.
+AIoT Phase 2 — a waste container occupancy monitor running on a **Freenove ESP32-S3** board. The device captures images of a container, preprocesses them on-device, and serves them over WiFi. Phase 1 used a remote server for inference; Phase 2 performs preprocessing on the ESP32-S3 itself and exposes a `/snapshot` HTTP endpoint for an external client to consume.
 
 ## Build & Flash Commands
 
-This project uses PlatformIO (not a Makefile or npm).
+This project uses **PlatformIO**. All commands assume `pio` is on your PATH.
 
 ```bash
-pio build          # Compile firmware
-pio upload         # Compile and flash to device
-pio monitor        # Open serial monitor (115200 baud)
-pio run -t upload && pio device monitor  # Flash then monitor
-pio test           # Run unit tests (in test/ directory)
+# Build
+pio run
+
+# Flash to device
+pio run --target upload
+
+# Serial monitor (115200 baud)
+pio device monitor
+
+# Build + flash + monitor in one line
+pio run --target upload && pio device monitor
+
+# Clean build artifacts
+pio run --target clean
 ```
 
-Build target: Freenove ESP32-S3 WROOM (`freenove_esp32s3_wroom`), platform `espressif32@6.10.0`, Arduino framework.
-
-## Configuration
-
-**WiFi credentials and server address are stored in `include/config.h`** (gitignored). Copy `include/config.h.example` to `include/config.h` and fill in:
-- WiFi SSID and password
-- Backend server IP (default: `192.168.1.70:8000`)
-- GPIO pin assignments
-
-**Camera model** is selected in `include/board_config.h` — currently `ESP32S3_EYE`. Pin mappings for each supported board are in `include/camera_pins.h`.
+The target environment is `freenove_esp32s3`. Upload/monitor port is `/dev/cu.usbmodem5AE70815351` (update in `platformio.ini` if your port differs).
 
 ## Architecture
 
-### Firmware (ESP32-S3)
+### Entry point: `src/main.cpp`
+Sets up WiFi, initializes all subsystems, registers the `/snapshot` HTTP route, and runs `server.handleClient()` in the main loop.
 
-**Request flow** (`GET /capture` HTTP endpoint):
-1. LED turns on → camera captures JPEG (SVGA 800×600, quality=12) → LED off
-2. Ultrasonic sensor reads distance → fill percentage calculated (logged only, not forwarded)
-3. JPEG posted as `multipart/form-data` to `http://<SERVER_IP>:8000/upload`
-4. Server response forwarded back to HTTP caller
+### HTTP endpoint: `GET /snapshot`
+1. Turns LED on, captures 800×600 JPEG, turns LED off
+2. Reads fill percentage from the ultrasonic sensor
+3. Calls `preprocessJpeg()` to produce a 192×192 JPEG
+4. Returns the JPEG with the fill level in the `X-Fill-Percentage` response header
 
-**Custom Libraries** (`lib/`):
-- `CameraManager` — OV2640 init, JPEG capture, frame buffer management (PSRAM-backed, 2 buffers)
-- `LEDController` — Common-anode RGB LED via LEDC PWM (channels 5–7, 12kHz, 8-bit); note: PWM is **inverted** (255 = full on)
-- `UltrasonicSensor` — HC-SR04 driver with temperature-compensated sound speed; calibrated range: EMPTY=17.5cm → FULL=3.5cm
+### Libraries (`lib/`)
 
-**Key hardware pins** (defaults in `config.h`):
-- Ultrasonic: TRIG=GPIO3, ECHO=GPIO46
-- LED: R=GPIO21, G=GPIO20, B=GPIO19
-- Camera: configured per `camera_pins.h` for ESP32S3_EYE
+| Library | Responsibility |
+|---|---|
+| `CameraManager` | Wraps `esp_camera` init, capture (`capturePhoto`), and release |
+| `LEDController` | RGB LED via LEDC PWM on pins 19/20/21; `ledOn/ledOff/setColor` |
+| `UltrasonicSensor` | HC-SR04 on TRIG=3/ECHO=46; `getFillPercentage()` maps 17.5 cm (0%) → 3.5 cm (100%) |
+| `PreprocessService` | `preprocessJpeg()`: decode JPEG → crop 480×480 @ (362, 284) → circular mask (radius 240, outside=white) → bilinear resize → 192×192 JPEG; all buffers via `ps_malloc` (PSRAM) |
 
-**Build flags** critical to the build:
-- `-DBOARD_HAS_PSRAM` — required; camera frame buffers use external PSRAM
-- `-DARDUINO_USB_MODE=0` — USB CDC mode for serial monitor
+### Configuration: `include/config.h`
+Contains WiFi credentials, server IP/port, pin assignments, and LEDC parameters. **Update this file before flashing** — credentials are stored in plain text.
 
-### Backend Server (`wco_server/`)
+### Camera pin mapping: `include/board_config.h` + `include/camera_pins.h`
+`CAMERA_MODEL_ESP32S3_EYE` is selected; other models are commented out.
 
-> Note: The `wco_server/` directory was deleted in the most recent commit ("Clear: unrelated remaining of phase_1 cleared"). The backend code will be created with endpoints: `/upload`.
+## Key Constraints
 
-## Data Labeling Convention
-
-Image filenames follow the pattern `t{test}_p{phase}_c{collection}_{frame}.jpg`:
-- `t` = test number (0-based)
-- `p` = phase/condition within test
-- `c` = camera/collection index
-- Frame count is zero-padded 4 digits
-
-Mixing states documented in `follow.txt` (Turkish): clean oil, add paint, add particles, add water — each capturing 15–20 photos per condition.
-
-## TensorFlow Lite Model
-
-`src/wco_model_data.h` contains ~345KB of embedded model weights (`g_wco_model_data[]`). The model has 3 outputs but is **not yet called** in `main.cpp` — integration is planned for a future phase.
+- **PSRAM is required** — all large image buffers use `ps_malloc`. The board is built with `BOARD_HAS_PSRAM` and `qio_opi` memory type.
+- The `preprocessJpeg` pipeline allocates three PSRAM buffers sequentially (raw RGB: ~1.4 MB, crop: ~691 KB, resized: ~110 KB); each is freed before the next allocation.
+- The TFLite model header (`include/wco_model_v2_data.h`) and the Colab training notebook (`wco_model_v2_2.ipynb`) are tracked in git history but removed from the working tree — the current code does not run inference on-device.

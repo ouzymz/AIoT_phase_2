@@ -54,46 +54,6 @@ int postJpeg(const String& url, const uint8_t* buf, size_t len,
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-void handleCapture() {
-    Serial.println("[Server] GET /capture received");
-
-    // 1. Capture
-    ledOn();
-    delay(1000);
-    camera_fb_t* fb = capturePhoto();
-    delay(1000);
-    ledOff();
-
-    if (!fb) {
-        server.send(500, "application/json",
-                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
-        return;
-    }
-
-    // 2. Distance — Serial only, not sent to server
-    float fillPercentage = getFillPercentage();
-    Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPercentage);
-
-    // 3. POST to /upload
-    String url = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) + "/upload";
-    Serial.printf("[HTTP] POSTing to %s\n", url.c_str());
-
-    String body;
-    int code = postJpeg(url, fb->buf, fb->len, "photo.jpg", &body);
-    releasePhoto(fb);
-
-    // 4. Forward server response to caller
-    if (code > 0) {
-        Serial.printf("[HTTP] Response %d: %s\n", code, body.c_str());
-        server.send(code, "application/json", body);
-    } else {
-        Serial.printf("[HTTP] POST failed: code %d\n", code);
-        server.send(502, "application/json",
-                    "{\"status\":\"error\",\"code\":" + String(code) + "}");
-    }
-}
-
-
 void handleSnapshot() {
     Serial.println("[Server] GET /snapshot received");
 
@@ -166,13 +126,12 @@ void setup() {
 
     Serial.printf("[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
 
-    server.on("/capture",  HTTP_GET, handleCapture);
     server.on("/snapshot", HTTP_GET, handleSnapshot);
     server.begin();
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
-    Serial.println("  Capture:   GET http://" + ip + "/capture");
+
     Serial.println("  Snapshot:  GET http://" + ip + "/snapshot");
 }
 
