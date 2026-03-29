@@ -8,6 +8,7 @@
 #include "LEDController.h"
 #include "UltrasonicSensor.h"
 #include "PreprocessService.h"
+#include "InferenceService.h"
 
 WebServer server(80);
 
@@ -93,6 +94,60 @@ void handleSnapshot() {
     free(out_jpg);
 }
 
+void handleCompute() {
+    Serial.println("[Server] GET /compute received");
+
+    // 1. Capture JPEG (800x600)
+    ledOn();
+    delay(1000);
+    camera_fb_t* fb = capturePhoto();
+    delay(1000);
+    ledOff();
+
+    if (!fb) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
+        return;
+    }
+
+    // 2. Measure fill level
+    float fillPct = getFillPercentage();
+    Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
+
+    // 3. Preprocess → raw 192x192 RGB (for inference) + JPEG (for response)
+    uint8_t* rgb_buf = nullptr;
+    uint8_t* out_jpg = nullptr;
+    size_t   out_len = 0;
+    bool ok = preprocessRgbAndJpeg(fb->buf, fb->len, &rgb_buf, &out_jpg, &out_len);
+    releasePhoto(fb);
+
+    if (!ok || !rgb_buf || !out_jpg) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"preprocess failed\"}");
+        return;
+    }
+
+    // 4. Run TFLite inference
+    float contamination = 0.0f;
+    float colour        = 0.0f;
+    bool inferred = runInference(rgb_buf, &contamination, &colour);
+    free(rgb_buf);
+
+    if (!inferred) {
+        free(out_jpg);
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"inference failed\"}");
+        return;
+    }
+
+    // 5. Respond: 192x192 JPEG body + model scores + fill level in headers
+    server.sendHeader("X-Fill-Percentage", String(fillPct, 1));
+    server.sendHeader("X-Contamination",   String(contamination, 4));
+    server.sendHeader("X-Colour",          String(colour, 4));
+    server.send_P(200, "image/jpeg", (const char*)out_jpg, out_len);
+
+    free(out_jpg);
+}
 
 // ─── Setup / Loop ────────────────────────────────────────────────────────────
 
@@ -106,6 +161,10 @@ void setup() {
     if (!initCamera()) {
         Serial.println("[Boot] Camera init failed, halting");
         while (true) { delay(1000); }
+    }
+
+    if (!initInference()) {
+        Serial.println("[Boot] Inference init failed — /compute will be unavailable");
     }
 
     Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
@@ -127,12 +186,13 @@ void setup() {
     Serial.printf("[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
 
     server.on("/snapshot", HTTP_GET, handleSnapshot);
+    server.on("/compute",  HTTP_GET, handleCompute);
     server.begin();
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
-
     Serial.println("  Snapshot:  GET http://" + ip + "/snapshot");
+    Serial.println("  Compute:   GET http://" + ip + "/compute");
 }
 
 void loop() {

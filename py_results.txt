@@ -1,0 +1,23 @@
+-->con8633co1719.jpeg
+py_test_results: 
+
+contamination: 0.9766
+colour:        0.9713
+
+TFLite [0]: 0.9922
+TFLite [1]: 0.9219
+
+esp32_test_results:
+
+[Server] GET /compute received
+[LED] setColor R=255 G=255 B=255
+[LED] ON (white)
+[Camera] Captured 15797 bytes
+[LED] setColor R=0 G=0 B=0
+[LED] OFF
+[Ultrasonic] Distance: 16.32 cm
+[Ultrasonic] Fill level: 8.5%
+[Sensor] Fill level: 8.5%
+[Preprocess] Done — output 5268 bytes
+[Camera] Frame buffer released
+[Inference] contamination=0.8633  colour=0.1719

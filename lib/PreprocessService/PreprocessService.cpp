@@ -13,28 +13,31 @@
 #define CROP_X0    (CX - R)   // 122
 #define CROP_Y0    (CY - R)   // 44
 
-bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
-                    uint8_t** out_jpg, size_t* out_len) {
+// ── Internal helper ──────────────────────────────────────────────────────────
+// Decodes src_jpg → crops 480×480 @ (CX,CY) with circular mask → bilinear
+// resize → 192×192 RGB888.  Returns a ps_malloc'd buffer (192*192*3 bytes)
+// or nullptr on failure.  Caller must free() the result.
+static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
 
-    // ── 1. Decode JPEG → RGB888 (800x600) ────────────────────────────────────
+    // 1. Decode JPEG → RGB888 (800x600)
     uint8_t* rgb = (uint8_t*)ps_malloc(CAM_W * CAM_H * 3);
     if (!rgb) {
         Serial.println("[Preprocess] ps_malloc failed for rgb");
-        return false;
+        return nullptr;
     }
 
     if (!fmt2rgb888(src_jpg, src_len, PIXFORMAT_JPEG, rgb)) {
         Serial.println("[Preprocess] JPEG decode failed");
         free(rgb);
-        return false;
+        return nullptr;
     }
 
-    // ── 2. Crop 480x480 centered at (CX, CY) + circle mask ───────────────────
+    // 2. Crop 480x480 centered at (CX, CY) + circle mask
     uint8_t* crop = (uint8_t*)ps_malloc(CROP_SIZE * CROP_SIZE * 3);
     if (!crop) {
         Serial.println("[Preprocess] ps_malloc failed for crop");
         free(rgb);
-        return false;
+        return nullptr;
     }
 
     const int r2 = R * R;
@@ -56,12 +59,12 @@ bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
     }
     free(rgb);
 
-    // ── 3. Bilinear resize 480x480 → 192x192 ─────────────────────────────────
+    // 3. Bilinear resize 480x480 → 192x192
     uint8_t* resized = (uint8_t*)ps_malloc(MODEL_SIZE * MODEL_SIZE * 3);
     if (!resized) {
         Serial.println("[Preprocess] ps_malloc failed for resized");
         free(crop);
-        return false;
+        return nullptr;
     }
 
     const float scale = (float)CROP_SIZE / (float)MODEL_SIZE;
@@ -99,7 +102,17 @@ bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
     }
     free(crop);
 
-    // ── 4. Encode 192x192 RGB888 → JPEG ──────────────────────────────────────
+    return resized;
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
+                    uint8_t** out_jpg, size_t* out_len) {
+
+    uint8_t* resized = preprocessToRgb192(src_jpg, src_len);
+    if (!resized) return false;
+
     bool ok = fmt2jpg(resized, MODEL_SIZE * MODEL_SIZE * 3,
                       MODEL_SIZE, MODEL_SIZE,
                       PIXFORMAT_RGB888, 80,
@@ -110,4 +123,28 @@ bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
     else     Serial.printf("[Preprocess] Done — output %zu bytes\n", *out_len);
 
     return ok;
+}
+
+bool preprocessRgbAndJpeg(const uint8_t* src_jpg, size_t src_len,
+                           uint8_t** out_rgb,
+                           uint8_t** out_jpg, size_t* out_len) {
+
+    uint8_t* resized = preprocessToRgb192(src_jpg, src_len);
+    if (!resized) return false;
+
+    bool ok = fmt2jpg(resized, MODEL_SIZE * MODEL_SIZE * 3,
+                      MODEL_SIZE, MODEL_SIZE,
+                      PIXFORMAT_RGB888, 80,
+                      out_jpg, out_len);
+
+    if (!ok) {
+        Serial.println("[Preprocess] JPEG encode failed");
+        free(resized);
+        *out_rgb = nullptr;
+        return false;
+    }
+
+    *out_rgb = resized;  // caller owns this buffer
+    Serial.printf("[Preprocess] Done — output %zu bytes\n", *out_len);
+    return true;
 }
