@@ -163,6 +163,130 @@ void handleCompute() {
     free(out_jpg);
 }
 
+void handleUploadTrainingImage() {
+    Serial.println("[Server] GET /uploadTrainingImage received");
+
+    // 1. Parse label args
+    if (!server.hasArg("turbidity") || !server.hasArg("particle") || !server.hasArg("color")) {
+        server.send(400, "application/json",
+                    "{\"status\":\"error\",\"message\":\"turbidity, particle and color are required\"}");
+        return;
+    }
+
+    int turbidity = server.arg("turbidity").toInt();
+    int particle  = server.arg("particle").toInt();
+    int color     = server.arg("color").toInt();
+
+    if ((turbidity != 0 && turbidity != 1) ||
+        (particle  != 0 && particle  != 1) ||
+        (color     != 0 && color     != 1)) {
+        server.send(400, "application/json",
+                    "{\"status\":\"error\",\"message\":\"turbidity, particle and color must be 0 or 1\"}");
+        return;
+    }
+
+    int model_size = 192;
+    if (server.hasArg("size")) {
+        int val = server.arg("size").toInt();
+        if (val > 0) model_size = val;
+    }
+
+    Serial.printf("[Server] labels t=%d p=%d c=%d  size=%d\n",
+                  turbidity, particle, color, model_size);
+
+    // 2. Capture
+    ledOn();
+    delay(1000);
+    camera_fb_t* fb = capturePhoto();
+    delay(1000);
+    ledOff();
+
+    if (!fb) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
+        return;
+    }
+
+    // 3. Preprocess → model_size x model_size JPEG
+    uint8_t* out_jpg = nullptr;
+    size_t   out_len = 0;
+    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len, model_size);
+    releasePhoto(fb);
+
+    if (!ok || !out_jpg) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"preprocess failed\"}");
+        return;
+    }
+
+    // 4. Build multipart body with file + label fields and POST to upload server
+    String filename = "t" + String(turbidity) +
+                      "-p" + String(particle) +
+                      "-c" + String(color) + ".jpeg";
+
+    const String boundary = "----ESP32Boundary";
+    auto field = [&](const String& name, const String& value) -> String {
+        return "--" + boundary + "\r\n"
+               "Content-Disposition: form-data; name=\"" + name + "\"\r\n\r\n" +
+               value + "\r\n";
+    };
+
+    String partTurbidity = field("turbidity", String(turbidity));
+    String partParticle  = field("particle",  String(particle));
+    String partColor     = field("color",     String(color));
+    String partFileHead  =
+        "--" + boundary + "\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n"
+        "Content-Type: image/jpeg\r\n\r\n";
+    String partEnd = "\r\n--" + boundary + "--\r\n";
+
+    size_t totalLen = partTurbidity.length() + partParticle.length() + partColor.length()
+                    + partFileHead.length() + out_len + partEnd.length();
+
+    uint8_t* payload = (uint8_t*)malloc(totalLen);
+    if (!payload) {
+        free(out_jpg);
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"malloc failed\"}");
+        return;
+    }
+
+    size_t offset = 0;
+    auto append = [&](const String& s) {
+        memcpy(payload + offset, s.c_str(), s.length());
+        offset += s.length();
+    };
+    append(partTurbidity);
+    append(partParticle);
+    append(partColor);
+    append(partFileHead);
+    memcpy(payload + offset, out_jpg, out_len); offset += out_len;
+    append(partEnd);
+    free(out_jpg);
+
+    String url = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT) +
+                 "/uploadGoogleDrive";
+
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    int code = http.POST(payload, totalLen);
+    free(payload);
+    String responseBody = (code > 0) ? http.getString() : "";
+    http.end();
+
+    Serial.printf("[Upload] POST %s → HTTP %d\n", url.c_str(), code);
+
+    if (code != 200) {
+        server.send(502, "application/json",
+                    "{\"status\":\"error\",\"message\":\"upload server error\",\"code\":" +
+                    String(code) + "}");
+        return;
+    }
+
+    server.send(200, "application/json", responseBody);
+}
+
 // ─── Setup / Loop ────────────────────────────────────────────────────────────
 
 void setup() {
@@ -199,14 +323,16 @@ void setup() {
 
     Serial.printf("[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
 
-    server.on("/snapshot", HTTP_GET, handleSnapshot);
-    server.on("/compute",  HTTP_GET, handleCompute);
+    server.on("/snapshot",            HTTP_GET, handleSnapshot);
+    server.on("/compute",             HTTP_GET, handleCompute);
+    server.on("/uploadTrainingImage", HTTP_GET, handleUploadTrainingImage);
     server.begin();
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
     Serial.println("  Snapshot:  GET http://" + ip + "/snapshot?size=192  (size optional, default 192)");
     Serial.println("  Compute:   GET http://" + ip + "/compute?size=192   (size optional, default 192)");
+    Serial.println("  Upload:    GET http://" + ip + "/uploadTrainingImage?turbidity=0&particle=0&color=0&size=192  (size optional)");
 }
 
 void loop() {
