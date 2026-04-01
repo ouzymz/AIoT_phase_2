@@ -8,16 +8,15 @@
 #define CY         284
 #define R          240
 #define CROP_SIZE  480   // R * 2
-#define MODEL_SIZE 192
 
 #define CROP_X0    (CX - R)   // 122
 #define CROP_Y0    (CY - R)   // 44
 
 // ── Internal helper ──────────────────────────────────────────────────────────
 // Decodes src_jpg → crops 480×480 @ (CX,CY) with circular mask → bilinear
-// resize → 192×192 RGB888.  Returns a ps_malloc'd buffer (192*192*3 bytes)
-// or nullptr on failure.  Caller must free() the result.
-static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
+// resize → model_size×model_size RGB888. Returns a ps_malloc'd buffer
+// (model_size*model_size*3 bytes) or nullptr on failure. Caller must free().
+static uint8_t* preprocessToRgb(const uint8_t* src_jpg, size_t src_len, int model_size) {
 
     // 1. Decode JPEG → RGB888 (800x600)
     uint8_t* rgb = (uint8_t*)ps_malloc(CAM_W * CAM_H * 3);
@@ -59,17 +58,17 @@ static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
     }
     free(rgb);
 
-    // 3. Bilinear resize 480x480 → 192x192
-    uint8_t* resized = (uint8_t*)ps_malloc(MODEL_SIZE * MODEL_SIZE * 3);
+    // 3. Bilinear resize 480x480 → model_size x model_size
+    uint8_t* resized = (uint8_t*)ps_malloc(model_size * model_size * 3);
     if (!resized) {
         Serial.println("[Preprocess] ps_malloc failed for resized");
         free(crop);
         return nullptr;
     }
 
-    const float scale = (float)CROP_SIZE / (float)MODEL_SIZE;
+    const float scale = (float)CROP_SIZE / (float)model_size;
 
-    for (int y = 0; y < MODEL_SIZE; y++) {
+    for (int y = 0; y < model_size; y++) {
         float fy  = (y + 0.5f) * scale - 0.5f;
         int   y0  = (int)fy;
         int   y1  = y0 + 1;
@@ -78,7 +77,7 @@ static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
         if (y0 < 0)          y0 = 0;
         if (y1 >= CROP_SIZE) y1 = CROP_SIZE - 1;
 
-        for (int x = 0; x < MODEL_SIZE; x++) {
+        for (int x = 0; x < model_size; x++) {
             float fx  = (x + 0.5f) * scale - 0.5f;
             int   x0  = (int)fx;
             int   x1  = x0 + 1;
@@ -92,7 +91,7 @@ static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
             const uint8_t* p10 = &crop[(y1 * CROP_SIZE + x0) * 3];
             const uint8_t* p11 = &crop[(y1 * CROP_SIZE + x1) * 3];
 
-            int o = (y * MODEL_SIZE + x) * 3;
+            int o = (y * model_size + x) * 3;
             for (int c = 0; c < 3; c++) {
                 float v = wy0 * (wx0 * p00[c] + wx1 * p01[c])
                         + wy1 * (wx0 * p10[c] + wx1 * p11[c]);
@@ -108,13 +107,14 @@ static uint8_t* preprocessToRgb192(const uint8_t* src_jpg, size_t src_len) {
 // ── Public API ───────────────────────────────────────────────────────────────
 
 bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
-                    uint8_t** out_jpg, size_t* out_len) {
+                    uint8_t** out_jpg, size_t* out_len,
+                    int model_size) {
 
-    uint8_t* resized = preprocessToRgb192(src_jpg, src_len);
+    uint8_t* resized = preprocessToRgb(src_jpg, src_len, model_size);
     if (!resized) return false;
 
-    bool ok = fmt2jpg(resized, MODEL_SIZE * MODEL_SIZE * 3,
-                      MODEL_SIZE, MODEL_SIZE,
+    bool ok = fmt2jpg(resized, model_size * model_size * 3,
+                      model_size, model_size,
                       PIXFORMAT_RGB888, 80,
                       out_jpg, out_len);
     free(resized);
@@ -127,13 +127,14 @@ bool preprocessJpeg(const uint8_t* src_jpg, size_t src_len,
 
 bool preprocessRgbAndJpeg(const uint8_t* src_jpg, size_t src_len,
                            uint8_t** out_rgb,
-                           uint8_t** out_jpg, size_t* out_len) {
+                           uint8_t** out_jpg, size_t* out_len,
+                           int model_size) {
 
-    uint8_t* resized = preprocessToRgb192(src_jpg, src_len);
+    uint8_t* resized = preprocessToRgb(src_jpg, src_len, model_size);
     if (!resized) return false;
 
-    bool ok = fmt2jpg(resized, MODEL_SIZE * MODEL_SIZE * 3,
-                      MODEL_SIZE, MODEL_SIZE,
+    bool ok = fmt2jpg(resized, model_size * model_size * 3,
+                      model_size, model_size,
                       PIXFORMAT_RGB888, 80,
                       out_jpg, out_len);
 

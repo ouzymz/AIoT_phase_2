@@ -58,6 +58,13 @@ int postJpeg(const String& url, const uint8_t* buf, size_t len,
 void handleSnapshot() {
     Serial.println("[Server] GET /snapshot received");
 
+    int model_size = 192;
+    if (server.hasArg("size")) {
+        int val = server.arg("size").toInt();
+        if (val > 0) model_size = val;
+    }
+    Serial.printf("[Server] model_size=%d\n", model_size);
+
     // 1. Capture JPEG (800x600)
     ledOn();
     delay(1000);
@@ -75,10 +82,10 @@ void handleSnapshot() {
     float fillPct = getFillPercentage();
     Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
 
-    // 3. Preprocess: crop 480x480 @ (362,284) + circle mask + bilinear resize → 192x192 JPEG
+    // 3. Preprocess: crop 480x480 @ (362,284) + circle mask + bilinear resize → model_size x model_size JPEG
     uint8_t* out_jpg = nullptr;
     size_t   out_len = 0;
-    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len);
+    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len, model_size);
     releasePhoto(fb);
 
     if (!ok || !out_jpg) {
@@ -97,6 +104,13 @@ void handleSnapshot() {
 void handleCompute() {
     Serial.println("[Server] GET /compute received");
 
+    int model_size = 192;
+    if (server.hasArg("size")) {
+        int val = server.arg("size").toInt();
+        if (val > 0) model_size = val;
+    }
+    Serial.printf("[Server] model_size=%d\n", model_size);
+
     // 1. Capture JPEG (800x600)
     ledOn();
     delay(1000);
@@ -114,11 +128,11 @@ void handleCompute() {
     float fillPct = getFillPercentage();
     Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
 
-    // 3. Preprocess → raw 192x192 RGB (for inference) + JPEG (for response)
+    // 3. Preprocess → raw model_size x model_size RGB (for inference) + JPEG (for response)
     uint8_t* rgb_buf = nullptr;
     uint8_t* out_jpg = nullptr;
     size_t   out_len = 0;
-    bool ok = preprocessRgbAndJpeg(fb->buf, fb->len, &rgb_buf, &out_jpg, &out_len);
+    bool ok = preprocessRgbAndJpeg(fb->buf, fb->len, &rgb_buf, &out_jpg, &out_len, model_size);
     releasePhoto(fb);
 
     if (!ok || !rgb_buf || !out_jpg) {
@@ -191,8 +205,8 @@ void setup() {
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
-    Serial.println("  Snapshot:  GET http://" + ip + "/snapshot");
-    Serial.println("  Compute:   GET http://" + ip + "/compute");
+    Serial.println("  Snapshot:  GET http://" + ip + "/snapshot?size=192  (size optional, default 192)");
+    Serial.println("  Compute:   GET http://" + ip + "/compute?size=192   (size optional, default 192)");
 }
 
 void loop() {
