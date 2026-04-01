@@ -9,6 +9,11 @@
 # Copy include/config.h.example → include/config.h and fill in credentials
 include/config.h
 
+# ── wco_server: secrets & OAuth tokens ───────────────────────────────────────
+wco_server/client_secret_*.json
+wco_server/project-*.json
+wco_server/token.pickle
+
 # ── wco_server: collected data ────────────────────────────────────────────────
 wco_server/data/images/*
 !wco_server/data/images/.gitkeep
