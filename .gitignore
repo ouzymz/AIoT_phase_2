@@ -15,6 +15,8 @@ wco_server/project-*.json
 wco_server/token.pickle
 
 # ── wco_server: collected data ────────────────────────────────────────────────
+
+wco_server/data/*
 wco_server/data/images/*
 !wco_server/data/images/.gitkeep
 wco_server/data/log.csv
