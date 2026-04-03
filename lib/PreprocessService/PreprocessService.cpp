@@ -58,7 +58,11 @@ static uint8_t* preprocessToRgb(const uint8_t* src_jpg, size_t src_len, int mode
     }
     free(rgb);
 
-    // 3. Bilinear resize 480x480 → model_size x model_size
+    // 3. Bilinear resize — skip if model_size equals crop size
+    if (model_size == CROP_SIZE) {
+        return crop;  // already the right size, no resize needed
+    }
+
     uint8_t* resized = (uint8_t*)ps_malloc(model_size * model_size * 3);
     if (!resized) {
         Serial.println("[Preprocess] ps_malloc failed for resized");
