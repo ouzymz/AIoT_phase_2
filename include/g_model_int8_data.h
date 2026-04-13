@@ -5,7 +5,7 @@
 #ifndef WCO_MODEL_DATA_H
 #define WCO_MODEL_DATA_H
 
-extern const unsigned char g_wco_model_v2_data[];
-extern const int g_wco_model_v2_data_len;
+extern const unsigned char g_model_int8_data[];
+extern const int g_model_int8_data_len;
 
 #endif  // WCO_MODEL_DATA_H

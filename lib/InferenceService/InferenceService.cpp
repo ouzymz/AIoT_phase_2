@@ -29,7 +29,7 @@ bool initInference() {
         return false;
     }
 
-    if (!ModelInit(g_wco_model_v2_data, tensor_arena, TENSOR_ARENA_SIZE)) {
+    if (!ModelInit(g_model_int8_data, tensor_arena, TENSOR_ARENA_SIZE)) {
         Serial.println("[Inference] ModelInit failed");
         return false;
     }
