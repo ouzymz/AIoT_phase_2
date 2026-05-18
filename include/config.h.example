@@ -2,8 +2,10 @@
 
 #define WIFI_SSID       "your_wifi_ssid"
 #define WIFI_PASSWORD   "your_wifi_password"
-#define SERVER_IP       "192.168.1.xxx"   // FastAPI server LAN IP
+#define SERVER_IP       "192.168.1.xxx"   // wco_phase1 (data collection) FastAPI LAN IP
 #define SERVER_PORT     8000
+#define CLOUD_SERVER_IP    "192.168.1.xxx"   // wco_phase_2 (cloud inference) FastAPI LAN IP
+#define CLOUD_SERVER_PORT  8001
 
 #define LED_RED_PIN     21
 #define LED_GREEN_PIN   20

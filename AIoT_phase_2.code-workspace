@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "macro_mouse",
+			"path": "../macro_mouse"
+		}
+	],
+	"settings": {}
+}

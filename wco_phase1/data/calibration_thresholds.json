@@ -1,0 +1,15 @@
+{
+  "turbidity_s_ref": 25.82210795930431,
+  "turbidity_contrast_threshold": 0.205,
+  "particle_blob_threshold": 5.0,
+  "color_darkening_threshold": 0.3628952080514252,
+  "calibration_stats": {
+    "n_images": 20,
+    "contrast_mean": 25.82210795930431,
+    "contrast_std": 0.1617380746532922,
+    "blob_mean": 0.9,
+    "blob_std": 0.6407232755171874,
+    "darkening_mean": 0.32289520805142524,
+    "darkening_std": 0.0007847176008987089
+  }
+}

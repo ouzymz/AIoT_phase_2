@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-multipart
+opencv-python-headless
+google-api-python-client
+google-auth
+python-dotenv
+google-auth-oauthlib

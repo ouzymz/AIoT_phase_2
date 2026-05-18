@@ -1,5 +1,5 @@
 #include "InferenceService.h"
-#include "wco_model_v2_data.h"
+#include "g_model_int8_data.h"
 
 #include <Arduino.h>
 #include <MicroTFLite.h>

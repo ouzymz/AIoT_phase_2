@@ -185,7 +185,7 @@ void handleUploadTrainingImage() {
         return;
     }
 
-    int model_size = 192;
+    int model_size = 480;
     if (server.hasArg("size")) {
         int val = server.arg("size").toInt();
         if (val > 0) model_size = val;
@@ -287,6 +287,111 @@ void handleUploadTrainingImage() {
     server.send(200, "application/json", responseBody);
 }
 
+// ─── /computeCloud — capture, preprocess, forward to wco_phase_2 ───────────
+
+// Extract a numeric value for `"key": ...` from a flat-ish JSON string.
+// Returns the textual value (trimmed); empty string on miss.
+static String jsonExtract(const String& body, const String& key) {
+    String needle = "\"" + key + "\"";
+    int idx = body.indexOf(needle);
+    if (idx < 0) return "";
+    int colon = body.indexOf(":", idx + needle.length());
+    if (colon < 0) return "";
+    int start = colon + 1;
+    while (start < (int)body.length() &&
+           (body[start] == ' ' || body[start] == '\t')) start++;
+    int end = start;
+    while (end < (int)body.length() &&
+           body[end] != ',' && body[end] != '}' && body[end] != '\n') end++;
+    String val = body.substring(start, end);
+    val.trim();
+    return val;
+}
+
+void handleComputeCloud() {
+    Serial.println("[Server] GET /computeCloud received");
+
+    if (!server.hasArg("model")) {
+        server.send(400, "application/json",
+                    "{\"status\":\"error\",\"message\":\"'model' query param is required "
+                    "(EfficientNetB0 | MobileNetV2 | MobileNetV1)\"}");
+        return;
+    }
+    String modelName = server.arg("model");
+
+    int model_size = 480;
+    if (server.hasArg("size")) {
+        int val = server.arg("size").toInt();
+        if (val > 0) model_size = val;
+    }
+    Serial.printf("[Server] model=%s size=%d\n", modelName.c_str(), model_size);
+
+    // 1. Capture
+    ledOn();
+    delay(1000);
+    camera_fb_t* fb = capturePhoto();
+    delay(1000);
+    ledOff();
+
+    if (!fb) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
+        return;
+    }
+
+    // 2. Fill level
+    float fillPct = getFillPercentage();
+    Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
+
+    // 3. Preprocess to model_size x model_size JPEG
+    uint8_t* out_jpg = nullptr;
+    size_t   out_len = 0;
+    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len, model_size);
+    releasePhoto(fb);
+
+    if (!ok || !out_jpg) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"preprocess failed\"}");
+        return;
+    }
+
+    // 4. Forward to wco_phase_2 /predict/{model_name}
+    String url = "http://" + String(CLOUD_SERVER_IP) + ":" + String(CLOUD_SERVER_PORT) +
+                 "/predict/" + modelName;
+    String responseBody;
+    int code = postJpeg(url, out_jpg, out_len, "compute.jpeg", &responseBody);
+
+    Serial.printf("[Cloud] POST %s → HTTP %d\n", url.c_str(), code);
+
+    if (code != 200) {
+        free(out_jpg);
+        server.send(502, "application/json",
+                    "{\"status\":\"error\",\"message\":\"cloud server error\",\"code\":" +
+                    String(code) + "}");
+        return;
+    }
+
+    // 5. Parse predictions from JSON body
+    String turbidity   = jsonExtract(responseBody, "turbidity");
+    String particle    = jsonExtract(responseBody, "particle");
+    String colour      = jsonExtract(responseBody, "color");
+    String inferenceMs = jsonExtract(responseBody, "inference_ms");
+    String inputSize   = jsonExtract(responseBody, "input_size");
+    inputSize.replace("\"", "");  // strip JSON quotes
+
+    // 6. Respond: preprocessed JPEG body + scores in headers
+    server.sendHeader("X-Model",           modelName);
+    server.sendHeader("X-Input-Size",      inputSize);
+    server.sendHeader("X-Inference-Ms",    inferenceMs);
+    server.sendHeader("X-Turbidity",       turbidity);
+    server.sendHeader("X-Particle",        particle);
+    server.sendHeader("X-Colour",          colour);
+    server.sendHeader("X-Fill-Percentage", String(fillPct, 1));
+    server.send_P(200, "image/jpeg", (const char*)out_jpg, out_len);
+
+    free(out_jpg);
+}
+
 // ─── Setup / Loop ────────────────────────────────────────────────────────────
 
 void setup() {
@@ -325,14 +430,16 @@ void setup() {
 
     server.on("/snapshot",            HTTP_GET, handleSnapshot);
     server.on("/compute",             HTTP_GET, handleCompute);
+    server.on("/computeCloud",        HTTP_GET, handleComputeCloud);
     server.on("/uploadTrainingImage", HTTP_GET, handleUploadTrainingImage);
     server.begin();
 
     String ip = WiFi.localIP().toString();
     Serial.println("[Boot] Ready.");
-    Serial.println("  Snapshot:  GET http://" + ip + "/snapshot?size=192  (size optional, default 192)");
-    Serial.println("  Compute:   GET http://" + ip + "/compute?size=192   (size optional, default 192)");
-    Serial.println("  Upload:    GET http://" + ip + "/uploadTrainingImage?turbidity=0&particle=0&color=0&size=192  (size optional)");
+    Serial.println("  Snapshot:     GET http://" + ip + "/snapshot?size=192  (size optional, default 192)");
+    Serial.println("  Compute:      GET http://" + ip + "/compute?size=192   (size optional, default 192)");
+    Serial.println("  ComputeCloud: GET http://" + ip + "/computeCloud?model=MobileNetV1&size=480");
+    Serial.println("  Upload:       GET http://" + ip + "/uploadTrainingImage?turbidity=0&particle=0&color=0&size=480  (size optional)");
 }
 
 void loop() {
