@@ -10,14 +10,13 @@
 extern TfLiteTensor*             tflInputTensor;
 extern tflite::MicroInterpreter* tflInterpreter;
 
-// Start conservatively; the Serial log will print how many bytes were actually
-// used so you can tune this down if memory is tight.
-#define TENSOR_ARENA_SIZE (350 * 1024)
+// V1 (128, a=0.25) ~280KB, V2 (160, a=0.35) ~420KB, B0 (224) ~1.2MB+ (won't fit on S3).
+// 500KB covers V1+V2 comfortably; bump higher only if MicroTFLite logs request more.
+#define TENSOR_ARENA_SIZE (500 * 1024)
 
 static uint8_t* tensor_arena = nullptr;
 
 bool initInference() {
-    // Prefer internal SRAM (faster); fall back to PSRAM if unavailable.
     tensor_arena = (uint8_t*)heap_caps_malloc(TENSOR_ARENA_SIZE,
                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!tensor_arena) {
@@ -36,30 +35,47 @@ bool initInference() {
 
     Serial.printf("[Inference] Ready — arena used: %d / %d bytes\n",
                   (int)tflInterpreter->arena_used_bytes(), TENSOR_ARENA_SIZE);
+
+    if (tflInputTensor && tflInputTensor->dims && tflInputTensor->dims->size >= 4) {
+        Serial.printf("[Inference] Input shape: [%d, %d, %d, %d]  outputs: %d\n",
+                      tflInputTensor->dims->data[0],
+                      tflInputTensor->dims->data[1],
+                      tflInputTensor->dims->data[2],
+                      tflInputTensor->dims->data[3],
+                      (int)tflInterpreter->outputs_size());
+    }
     ModelPrintTensorInfo();
     return true;
 }
 
-bool runInference(const uint8_t* rgb_buf, float* contamination, float* colour) {
-    constexpr int INPUT_SIZE = 192 * 192 * 3;
+int getModelInputSize() {
+    if (!tflInputTensor || !tflInputTensor->dims || tflInputTensor->dims->size < 4) {
+        return 0;
+    }
+    return tflInputTensor->dims->data[1];  // assumes NHWC, H == W
+}
 
-    // Write pixels directly into the input tensor buffer (avoids 110k
-    // individual ModelSetInput() calls).
+bool runInference(const uint8_t* rgb_buf,
+                  float* turbidity, float* particle, float* colour) {
+    const int H = getModelInputSize();
+    if (H <= 0) {
+        Serial.println("[Inference] Input tensor not ready");
+        return false;
+    }
+    const int INPUT_SIZE = H * H * 3;
+
     if (tflInputTensor->type == kTfLiteUInt8) {
         memcpy(tflInputTensor->data.uint8, rgb_buf, INPUT_SIZE);
     } else if (tflInputTensor->type == kTfLiteInt8) {
-        // uint8 [0,255] → int8 [-128,127]  (standard INT8 quantisation offset)
         for (int i = 0; i < INPUT_SIZE; i++)
             tflInputTensor->data.int8[i] = (int8_t)((int)rgb_buf[i] - 128);
     } else {
-        // float32 — normalise to [0, 1]
         for (int i = 0; i < INPUT_SIZE; i++)
             tflInputTensor->data.f[i] = rgb_buf[i] / 255.0f;
     }
 
     if (!ModelRunInference()) return false;
 
-    // Dequantise one scalar from a tensor (int8 / uint8 / float32).
     auto dequant = [](TfLiteTensor* t, int idx) -> float {
         if (t->type == kTfLiteInt8)
             return ((float)t->data.int8[idx]  - t->params.zero_point) * t->params.scale;
@@ -68,12 +84,18 @@ bool runInference(const uint8_t* rgb_buf, float* contamination, float* colour) {
         return t->data.f[idx];
     };
 
-    // output(1) = contamination, output(0) = colour
-    // (matches Python: preds[0] → contamination, preds[1] → colour)
-    *contamination = dequant(tflInterpreter->output(1), 0);
-    *colour        = dequant(tflInterpreter->output(0), 0);
+    // Keras dict-output → TFLite alphabetical ordering:
+    // output(0) = colour, output(1) = particle, output(2) = turbidity
+    const int n_out = (int)tflInterpreter->outputs_size();
+    if (n_out < 3) {
+        Serial.printf("[Inference] Expected 3 outputs, got %d\n", n_out);
+        return false;
+    }
+    *colour    = dequant(tflInterpreter->output(0), 0);
+    *particle  = dequant(tflInterpreter->output(1), 0);
+    *turbidity = dequant(tflInterpreter->output(2), 0);
 
-    Serial.printf("[Inference] contamination=%.4f  colour=%.4f\n",
-                  *contamination, *colour);
+    Serial.printf("[Inference] turbidity=%.4f  particle=%.4f  colour=%.4f\n",
+                  *turbidity, *particle, *colour);
     return true;
 }

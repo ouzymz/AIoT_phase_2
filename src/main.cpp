@@ -12,6 +12,15 @@
 
 WebServer server(80);
 
+// ─── CORS ────────────────────────────────────────────────────────────────────
+// Allow the Angular web client (different origin) to read custom X-* headers.
+static void sendCorsHeaders() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.sendHeader("Access-Control-Expose-Headers",
+        "X-Fill-Percentage, X-Turbidity, X-Particle, X-Colour, "
+        "X-Input-Size, X-Inference-Ms, X-Model, X-Benchmark-Results");
+}
+
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
 // POST a single JPEG as multipart/form-data (field name: "file").
@@ -57,6 +66,7 @@ int postJpeg(const String& url, const uint8_t* buf, size_t len,
 
 void handleSnapshot() {
     Serial.println("[Server] GET /snapshot received");
+    sendCorsHeaders();
 
     int model_size = 192;
     if (server.hasArg("size")) {
@@ -103,11 +113,19 @@ void handleSnapshot() {
 
 void handleCompute() {
     Serial.println("[Server] GET /compute received");
+    sendCorsHeaders();
 
-    int model_size = 192;
+    // Use whatever input size the loaded TFLite model declares.
+    // ?size query param is ignored — preprocessing must match the model.
+    int model_size = getModelInputSize();
+    if (model_size <= 0) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"inference not initialised\"}");
+        return;
+    }
     if (server.hasArg("size")) {
-        int val = server.arg("size").toInt();
-        if (val > 0) model_size = val;
+        Serial.printf("[Server] ?size=%s ignored — using model's %dx%d\n",
+                      server.arg("size").c_str(), model_size, model_size);
     }
     Serial.printf("[Server] model_size=%d\n", model_size);
 
@@ -141,10 +159,11 @@ void handleCompute() {
         return;
     }
 
-    // 4. Run TFLite inference
-    float contamination = 0.0f;
-    float colour        = 0.0f;
-    bool inferred = runInference(rgb_buf, &contamination, &colour);
+    // 4. Run TFLite inference (3 heads)
+    float turbidity = 0.0f;
+    float particle  = 0.0f;
+    float colour    = 0.0f;
+    bool inferred = runInference(rgb_buf, &turbidity, &particle, &colour);
     free(rgb_buf);
 
     if (!inferred) {
@@ -154,10 +173,12 @@ void handleCompute() {
         return;
     }
 
-    // 5. Respond: 192x192 JPEG body + model scores + fill level in headers
+    // 5. Respond: preprocessed JPEG body + model scores + fill level in headers
     server.sendHeader("X-Fill-Percentage", String(fillPct, 1));
-    server.sendHeader("X-Contamination",   String(contamination, 4));
+    server.sendHeader("X-Turbidity",       String(turbidity, 4));
+    server.sendHeader("X-Particle",        String(particle, 4));
     server.sendHeader("X-Colour",          String(colour, 4));
+    server.sendHeader("X-Input-Size",      String(model_size));
     server.send_P(200, "image/jpeg", (const char*)out_jpg, out_len);
 
     free(out_jpg);
@@ -165,6 +186,7 @@ void handleCompute() {
 
 void handleUploadTrainingImage() {
     Serial.println("[Server] GET /uploadTrainingImage received");
+    sendCorsHeaders();
 
     // 1. Parse label args
     if (!server.hasArg("turbidity") || !server.hasArg("particle") || !server.hasArg("color")) {
@@ -310,6 +332,7 @@ static String jsonExtract(const String& body, const String& key) {
 
 void handleComputeCloud() {
     Serial.println("[Server] GET /computeCloud received");
+    sendCorsHeaders();
 
     if (!server.hasArg("model")) {
         server.send(400, "application/json",
@@ -392,6 +415,74 @@ void handleComputeCloud() {
     free(out_jpg);
 }
 
+// ─── /computeBenchmark — capture, preprocess, forward to wco_phase_2 /benchmark ─
+
+void handleComputeBenchmark() {
+    Serial.println("[Server] GET /computeBenchmark received");
+    sendCorsHeaders();
+
+    int model_size = 480;
+    if (server.hasArg("size")) {
+        int val = server.arg("size").toInt();
+        if (val > 0) model_size = val;
+    }
+    Serial.printf("[Server] size=%d\n", model_size);
+
+    // 1. Capture
+    ledOn();
+    delay(1000);
+    camera_fb_t* fb = capturePhoto();
+    delay(1000);
+    ledOff();
+
+    if (!fb) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"camera capture failed\"}");
+        return;
+    }
+
+    // 2. Fill level
+    float fillPct = getFillPercentage();
+    Serial.printf("[Sensor] Fill level: %.1f%%\n", fillPct);
+
+    // 3. Preprocess to model_size x model_size JPEG
+    uint8_t* out_jpg = nullptr;
+    size_t   out_len = 0;
+    bool ok = preprocessJpeg(fb->buf, fb->len, &out_jpg, &out_len, model_size);
+    releasePhoto(fb);
+
+    if (!ok || !out_jpg) {
+        server.send(500, "application/json",
+                    "{\"status\":\"error\",\"message\":\"preprocess failed\"}");
+        return;
+    }
+
+    // 4. Forward to wco_phase_2 /benchmark
+    String url = "http://" + String(CLOUD_SERVER_IP) + ":" + String(CLOUD_SERVER_PORT) +
+                 "/benchmark";
+    String responseBody;
+    int code = postJpeg(url, out_jpg, out_len, "benchmark.jpeg", &responseBody);
+
+    Serial.printf("[Cloud] POST %s → HTTP %d\n", url.c_str(), code);
+
+    if (code != 200) {
+        free(out_jpg);
+        server.send(502, "application/json",
+                    "{\"status\":\"error\",\"message\":\"cloud server error\",\"code\":" +
+                    String(code) + "}");
+        return;
+    }
+
+    // 5. Respond: preprocessed JPEG body + full benchmark JSON in header + fill level
+    //    The benchmark response (3 models, ~700 bytes JSON) is returned verbatim
+    //    in X-Benchmark-Results so the caller can parse it client-side.
+    server.sendHeader("X-Benchmark-Results", responseBody);
+    server.sendHeader("X-Fill-Percentage",   String(fillPct, 1));
+    server.send_P(200, "image/jpeg", (const char*)out_jpg, out_len);
+
+    free(out_jpg);
+}
+
 // ─── Setup / Loop ────────────────────────────────────────────────────────────
 
 void setup() {
@@ -401,13 +492,16 @@ void setup() {
 
     initLED();
     initUltrasonic();
+
+    // Inference FIRST so the tensor arena can claim internal SRAM
+    // before the camera driver fragments PSRAM.
+    if (!initInference()) {
+        Serial.println("[Boot] Inference init failed — /compute will be unavailable");
+    }
+
     if (!initCamera()) {
         Serial.println("[Boot] Camera init failed, halting");
         while (true) { delay(1000); }
-    }
-
-    if (!initInference()) {
-        Serial.println("[Boot] Inference init failed — /compute will be unavailable");
     }
 
     Serial.printf("[WiFi] Connecting to %s", WIFI_SSID);
@@ -431,6 +525,7 @@ void setup() {
     server.on("/snapshot",            HTTP_GET, handleSnapshot);
     server.on("/compute",             HTTP_GET, handleCompute);
     server.on("/computeCloud",        HTTP_GET, handleComputeCloud);
+    server.on("/computeBenchmark",    HTTP_GET, handleComputeBenchmark);
     server.on("/uploadTrainingImage", HTTP_GET, handleUploadTrainingImage);
     server.begin();
 
@@ -439,6 +534,7 @@ void setup() {
     Serial.println("  Snapshot:     GET http://" + ip + "/snapshot?size=192  (size optional, default 192)");
     Serial.println("  Compute:      GET http://" + ip + "/compute?size=192   (size optional, default 192)");
     Serial.println("  ComputeCloud: GET http://" + ip + "/computeCloud?model=MobileNetV1&size=480");
+    Serial.println("  Benchmark:    GET http://" + ip + "/computeBenchmark?size=480  (size optional, default 480)");
     Serial.println("  Upload:       GET http://" + ip + "/uploadTrainingImage?turbidity=0&particle=0&color=0&size=480  (size optional)");
 }
 

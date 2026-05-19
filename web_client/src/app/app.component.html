@@ -1,0 +1,242 @@
+<mat-toolbar color="primary" class="toolbar">
+  <mat-icon>memory</mat-icon>
+  <span class="title">WCO ESP32 Client</span>
+  <span class="spacer"></span>
+  <mat-form-field appearance="outline" class="ip-field" subscriptSizing="dynamic">
+    <mat-label style="color: black;">ESP32 IP</mat-label>
+    <input
+      matInput
+      [ngModel]="esp32Ip()"
+      (ngModelChange)="onIpChange($event)"
+      placeholder="192.168.1.50"
+    />
+  </mat-form-field>
+</mat-toolbar>
+
+<main class="grid">
+  <!-- ─── EDGE ─────────────────────────────────────────────────────────── -->
+  <mat-card class="card card-edge">
+    <mat-card-header>
+      <mat-card-title>
+        <span>Compute Edge</span>
+        <mat-icon
+          class="help-icon"
+          matTooltip="ESP32 üzerinde TFLite ile inference çalıştırır. Cihaz fotoğraf çeker, preprocess eder ve gömülü modelle turbidity / particle / colour skorlarını üretir. Bulut bağlantısı gerektirmez."
+          matTooltipPosition="above"
+          >help_outline</mat-icon
+        >
+      </mat-card-title>
+      <mat-card-subtitle>On-device TFLite inference</mat-card-subtitle>
+    </mat-card-header>
+    <mat-card-content>
+      <button
+        mat-flat-button
+        color="primary"
+        (click)="runEdge()"
+        [disabled]="edgeStatus() === 'loading'"
+      >
+        <mat-icon>play_arrow</mat-icon>
+        Run /compute
+      </button>
+
+      <div class="status" *ngIf="edgeStatus() === 'loading'">
+        <mat-spinner diameter="32"></mat-spinner>
+        <span>Capturing & running inference…</span>
+      </div>
+
+      <div class="error" *ngIf="edgeStatus() === 'error'">
+        <mat-icon>error_outline</mat-icon>
+        {{ edgeError() }}
+      </div>
+
+      <div class="result">
+        <ng-container *ngIf="edgeResult()?.imageUrl as url; else edgePlaceholder">
+          <img [src]="url" alt="captured" class="thumb" />
+        </ng-container>
+        <ng-template #edgePlaceholder>
+          <div class="thumb thumb-placeholder">
+            <mat-icon>image</mat-icon>
+          </div>
+        </ng-template>
+
+        <div class="meta">
+          <div><strong>Fill:</strong> {{ display(edgeResult()?.fillPercentage, '%') }}</div>
+          <div><strong>Input size:</strong> {{ display(edgeResult()?.inputSize) }}</div>
+          <mat-divider></mat-divider>
+          <div><strong>Turbidity:</strong> {{ display(edgeResult()?.turbidity) }}</div>
+          <div><strong>Particle:</strong> {{ display(edgeResult()?.particle) }}</div>
+          <div><strong>Colour:</strong> {{ display(edgeResult()?.colour) }}</div>
+        </div>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- ─── CLOUD ────────────────────────────────────────────────────────── -->
+  <mat-card class="card card-cloud">
+    <mat-card-header>
+      <mat-card-title>
+        <span>Compute Cloud</span>
+        <mat-icon
+          class="help-icon"
+          matTooltip="ESP32 fotoğraf çeker, bulut sunucusuna (wco_phase_2) gönderir ve seçilen tek modelle inference yapar. Dropdown'dan model seçilir; cevap olarak preprocess edilmiş resim, inference süresi ve skorlar dönülür."
+          matTooltipPosition="above"
+          >help_outline</mat-icon
+        >
+      </mat-card-title>
+      <mat-card-subtitle>Single model on wco_phase_2</mat-card-subtitle>
+    </mat-card-header>
+    <mat-card-content>
+      <div class="row">
+        <mat-form-field appearance="outline" subscriptSizing="dynamic">
+          <mat-label>Model</mat-label>
+          <mat-select
+            [value]="selectedModel()"
+            (selectionChange)="selectedModel.set($event.value)"
+          >
+            <mat-option *ngFor="let m of cloudModels" [value]="m">
+              {{ m }}
+            </mat-option>
+          </mat-select>
+        </mat-form-field>
+
+        <button
+          mat-flat-button
+          color="primary"
+          (click)="runCloud()"
+          [disabled]="cloudStatus() === 'loading'"
+        >
+          <mat-icon>cloud</mat-icon>
+          Run /computeCloud
+        </button>
+      </div>
+
+      <div class="status" *ngIf="cloudStatus() === 'loading'">
+        <mat-spinner diameter="32"></mat-spinner>
+        <span>Sending to cloud server…</span>
+      </div>
+
+      <div class="error" *ngIf="cloudStatus() === 'error'">
+        <mat-icon>error_outline</mat-icon>
+        {{ cloudError() }}
+      </div>
+
+      <div class="result">
+        <ng-container *ngIf="cloudResult()?.imageUrl as url; else cloudPlaceholder">
+          <img [src]="url" alt="captured" class="thumb" />
+        </ng-container>
+        <ng-template #cloudPlaceholder>
+          <div class="thumb thumb-placeholder">
+            <mat-icon>image</mat-icon>
+          </div>
+        </ng-template>
+
+        <div class="meta">
+          <div><strong>Model:</strong> {{ display(cloudResult()?.model) }}</div>
+          <div><strong>Input size:</strong> {{ display(cloudResult()?.inputSize) }}</div>
+          <div><strong>Inference:</strong> {{ display(cloudResult()?.inferenceMs, ' ms') }}</div>
+          <div><strong>Fill:</strong> {{ display(cloudResult()?.fillPercentage, '%') }}</div>
+          <mat-divider></mat-divider>
+          <div><strong>Turbidity:</strong> {{ display(cloudResult()?.turbidity) }}</div>
+          <div><strong>Particle:</strong> {{ display(cloudResult()?.particle) }}</div>
+          <div><strong>Colour:</strong> {{ display(cloudResult()?.colour) }}</div>
+        </div>
+      </div>
+    </mat-card-content>
+  </mat-card>
+
+  <!-- ─── BENCHMARK ────────────────────────────────────────────────────── -->
+  <mat-card class="card card-bench">
+    <mat-card-header>
+      <mat-card-title>
+        <span>Compute Cloud Benchmark</span>
+        <mat-icon
+          class="help-icon"
+          matTooltip="Fotoğrafı bulut sunucusuna gönderir ve 3 modeli (EfficientNetB0, MobileNetV2, MobileNetV1) tek seferde sırayla çalıştırır. Her model için inference süresi, RAM tüketimi ve tahminleri karşılaştırmalı olarak listeler."
+          matTooltipPosition="above"
+          >help_outline</mat-icon
+        >
+      </mat-card-title>
+      <mat-card-subtitle>All cloud models, sequential</mat-card-subtitle>
+    </mat-card-header>
+    <mat-card-content>
+      <button
+        mat-flat-button
+        color="primary"
+        (click)="runBenchmark()"
+        [disabled]="benchStatus() === 'loading'"
+      >
+        <mat-icon>speed</mat-icon>
+        Run /computeBenchmark
+      </button>
+
+      <div class="status" *ngIf="benchStatus() === 'loading'">
+        <mat-spinner diameter="32"></mat-spinner>
+        <span>Capturing & benchmarking all models…</span>
+      </div>
+
+      <div class="error" *ngIf="benchStatus() === 'error'">
+        <mat-icon>error_outline</mat-icon>
+        {{ benchError() }}
+      </div>
+
+      <div class="bench-layout">
+        <div class="result">
+          <ng-container *ngIf="benchResult()?.imageUrl as url; else benchPlaceholder">
+            <img [src]="url" alt="captured" class="thumb" />
+          </ng-container>
+          <ng-template #benchPlaceholder>
+            <div class="thumb thumb-placeholder">
+              <mat-icon>image</mat-icon>
+            </div>
+          </ng-template>
+
+          <div class="meta">
+            <div><strong>Fill:</strong> {{ display(benchResult()?.fillPercentage, '%') }}</div>
+            <div><strong>Image bytes:</strong> {{ display(benchResult()?.imageSizeBytes) }}</div>
+          </div>
+        </div>
+
+        <table
+          mat-table
+          [dataSource]="benchResult()?.results ?? []"
+          class="bench-table"
+        >
+          <ng-container matColumnDef="model">
+            <th mat-header-cell *matHeaderCellDef>Model</th>
+            <td mat-cell *matCellDef="let row">{{ row.model }}</td>
+          </ng-container>
+          <ng-container matColumnDef="input_size">
+            <th mat-header-cell *matHeaderCellDef>Input</th>
+            <td mat-cell *matCellDef="let row">{{ row.input_size }}</td>
+          </ng-container>
+          <ng-container matColumnDef="inference_ms">
+            <th mat-header-cell *matHeaderCellDef>Inference ms</th>
+            <td mat-cell *matCellDef="let row">{{ row.inference_ms }}</td>
+          </ng-container>
+          <ng-container matColumnDef="ram_delta_mb">
+            <th mat-header-cell *matHeaderCellDef>RAM Δ MB</th>
+            <td mat-cell *matCellDef="let row">{{ row.ram_delta_mb }}</td>
+          </ng-container>
+          <ng-container matColumnDef="turbidity">
+            <th mat-header-cell *matHeaderCellDef>Turbidity</th>
+            <td mat-cell *matCellDef="let row">{{ row.predictions.turbidity }}</td>
+          </ng-container>
+          <ng-container matColumnDef="particle">
+            <th mat-header-cell *matHeaderCellDef>Particle</th>
+            <td mat-cell *matCellDef="let row">{{ row.predictions.particle }}</td>
+          </ng-container>
+          <ng-container matColumnDef="color">
+            <th mat-header-cell *matHeaderCellDef>Colour</th>
+            <td mat-cell *matCellDef="let row">{{ row.predictions.color }}</td>
+          </ng-container>
+
+          <tr mat-header-row *matHeaderRowDef="benchColumns"></tr>
+          <tr mat-row *matRowDef="let row; columns: benchColumns"></tr>
+          <tr class="empty-row" *matNoDataRow>
+            <td [attr.colspan]="benchColumns.length">N/A — run the benchmark to populate</td>
+          </tr>
+        </table>
+      </div>
+    </mat-card-content>
+  </mat-card>
+</main>
