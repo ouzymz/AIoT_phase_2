@@ -23,7 +23,7 @@ One example per combination, drawn from [`training_data_samples/`](training_data
 | 0 | 1 | 0 | particulates only | <img src="training_data_samples/t0-p1-c0(11).jpeg" width="140"> |
 | 0 | 1 | 1 | particulates + darkened | <img src="training_data_samples/t0-p1-c1(6).jpeg" width="140"> |
 | 1 | 0 | 0 | turbid only | <img src="training_data_samples/t1-p0-c0(12).jpeg" width="140"> |
-| 1 | 0 | 1 | turbid + darkened | _sample not included in the public set_ |
+| 1 | 0 | 1 | turbid + darkened | <img src="training_data_samples/t1-p0-c1.jpeg" width="140">|
 | 1 | 1 | 0 | turbid + particulates | <img src="training_data_samples/t1-p1-c0(3).jpeg" width="140"> |
 | 1 | 1 | 1 | all three positive | <img src="training_data_samples/t1-p1-c1(1).jpeg" width="140"> |
 
